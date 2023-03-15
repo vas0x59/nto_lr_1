@@ -92,7 +92,7 @@ class WallDetector:
             ij = self.map_xy2ij(p[:2])
             if ij is None:
                 continue
-            self.map_a[ij[0], ij[1]] = np.clip(self.map_a[ij[0], ij[1]] + 5, 0, 255)
+            self.map_a[ij[0], ij[1]] = np.clip(self.map_a[ij[0], ij[1]] + 10, 0, 255)
             # self.map_a[ij[0], ij[1]] = 255
 
 
