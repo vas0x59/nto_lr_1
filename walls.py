@@ -47,7 +47,7 @@ class WallDetector:
     opening_iterations = 1
     debug = False
     resolution = 0.01
-    map_wh = (6, 4)
+    map_wh = (7, 4)
     map_origin = np.array([0, 0])
     
     def __init__(self, cm: Optional[np.ndarray] = None, dc: Optional[np.ndarray] = None, tf_buffer = None, tf_listener = None, cv_bridge = None  ) -> None:
