@@ -1,0 +1,14 @@
+material wall
+{
+	technique
+	{
+		pass
+		{
+			ambient 1 1 1 1.0
+			diffuse 1 1 1 1.0
+			specular 1 1 1 1.0 12.5
+
+			
+		}
+	}
+}
