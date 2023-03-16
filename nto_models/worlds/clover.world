@@ -15,55 +15,55 @@
     </include>
 
     <include>
-      <uri>model://wall_1525</uri>
+      <uri>model://wall_1</uri>
       <name>1_wall</name>
 
-      <pose>2 2 0 0 0 0</pose>
+      <pose>2 2 0 0 -0 0</pose>
     </include>
 
     <include>
       <uri>model://wall_1</uri>
       <name>2_wall</name>
 
-      <pose>2.7625 2.5 0 0 0 1.5708</pose>
+      <pose>2.5 2.5 0 0 -0 1.5708</pose>
     </include>
 
     <include>
       <uri>model://wall_1</uri>
       <name>3_wall</name>
 
-      <pose>3.26 3 0 0 0 0</pose>
+      <pose>3 3 0 0 -0 0</pose>
     </include>
 
     <include>
       <uri>model://wall_1525</uri>
       <name>4_wall</name>
 
-      <pose>3.75 2.24 0 0 0 1.5708</pose>
+      <pose>3.5 2.24 0 0 -0 1.5708</pose>
     </include>
 
     <include>
       <uri>model://wall_1525</uri>
       <name>5_wall</name>
 
-      <pose>5.06 2.22 0 0 0 1.5708</pose>
+      <pose>4.49304 2.24208 0.0 0 -0 1.5708</pose>
     </include>
 
     <include>
       <uri>model://wall_1</uri>
       <name>6_wall</name>
 
-      <pose>6.06 3.47 0 0 0 1.5708</pose>
+       <pose>5.51035 2.51444 0.0 0 -0 1.5708</pose>
     </include>
 
     <include>
       <uri>model://wall_1</uri>
       <name>7_wall</name>
 
-      <pose>5.55 3.0 0 0 0 0</pose>
+      <pose>5.00343 3.00667 0 0 -0 0</pose>
     </include>
 
-    <include>
+    <!-- <include>
       <uri>model://wall_1525</uri>
       <name>8_wall</name>
 
@@ -75,13 +75,49 @@
       <name>9_wall</name>
 
       <pose>4.4 1.47 0 0 0 0</pose>
-    </include>
+    </include> -->
 
     <include>
       <uri>model://wall_1525</uri>
       <name>10_wall</name>
 
-      <pose>7.33 3.22 0 0 0 1.5708</pose>
+      <pose>6.39647 1.78072 0.0 0 -0 1.5708</pose>
+    </include>
+
+    <include>
+      <uri>model://wall_1</uri>
+      <name>11_wall</name>
+
+      <pose>3.99299 1.48244 -0 0 -0 0</pose>
+    </include>
+
+    <include>
+      <uri>model://wall_1</uri>
+      <name>12_wall</name>
+
+        <pose>5.51778 1.52296 0 0 -0 1.5701</pose>
+    </include>
+
+    <include>
+      <uri>model://wall_1</uri>
+      <name>13_wall</name>
+
+       <pose>5.89854 1.03035 0.0 0 -0 0</pose>
+    </include>
+
+
+    <include>
+      <uri>model://redSquare</uri>
+      <name>redSquare_1</name>
+
+      <pose>1 2.5 0 0 0 0</pose>
+    </include>
+
+    <include>
+      <uri>model://redSquare</uri>
+      <name>redSquare_2</name>
+
+      <pose>4 4 0 0 0 0</pose>
     </include>
 
     <scene>

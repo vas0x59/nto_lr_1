@@ -1,9 +1,9 @@
 <?xml version='1.0'?>
 <sdf version="1.5">
   <model name="wall_1">
-    <pose>0 0 0.65 0 0 0</pose>
     <static>true</static>
     <link name="link">
+      <pose>0 0 0.65 0 0 0</pose>
       <inertial>
         <mass>1.0</mass>
         <inertia>

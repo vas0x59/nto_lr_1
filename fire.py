@@ -9,38 +9,66 @@ from geometry_msgs.msg import Point32, Vector3Stamped, Vector3, Point
 import rospy
 
 from visualization_msgs.msg import Marker, MarkerArray
+import requests
 
 class FireSearch:
     lower_thr = (
-        (0, 30, 30),
-        (170, 30, 30)
+        (0, 30, 80),
+        (170, 30, 80)
     )
     upper_thr = (
         (35, 255, 255),
         (180, 255, 255)
     )
+    blue_lower = (
+        95, 100, 50
+    )
+    blue_upper = (
+        125, 255, 255
+    )
 
-    fire_fraction = 0.0005
+    fire_fraction = 0.0035
     fire_radius = 1
 
-    def __init__(self, cm: Optional[np.ndarray] = None, dc: Optional[np.ndarray] = None, tf_buffer = None):
+    def __init__(self, cm: Optional[np.ndarray] = None, dc: Optional[np.ndarray] = None, tf_buffer = None, cv_bridge = None):
         self.cm = cm
         self.dc = dc
         self.tf_buffer = tf_buffer
+        self.cv_bridge = cv_bridge
         self.fires_pub = rospy.Publisher("/a/fires_viz", MarkerArray)
+        self.blue_pub = rospy.Publisher("/a/blue_viz", MarkerArray)
         self.fires = []
-        
+        self.blue_obj = []
+        self.debug_pub = rospy.Publisher("/a/fires_debug", Image)
+        self.mask_overlay_pub = rospy.Publisher("/a/fires_mask_overlay_pub", Image)
+
+    def get_material(self, position):
+        payload = {'x': position[0], 'y': position[1]}
+        material = requests.get('http://65.108.222.51/check_material', params=payload).text
+
+        return material
+
     def report(self):
         print(f"Fires: {len(self.fires)}")
         print()
+
+        a_classes = ['coal', 'textiles', 'plastics']
         for idx, cloud in enumerate(self.fires):
-            x, y = 0, 0
-            for p in cloud:
-                x += p[0]
-                y += p[1]
-            x /= len(cloud)
-            y /= len(cloud)
-            print(f"Fire {idx + 1}: {round(x, 1)} {round(y, 1)}")
+            x, y = np.mean(cloud, axis=0)
+
+            material = self.get_material([x, y])
+            class_fire = ('A' if material in a_classes else 'B')
+            print(f"Fire {idx + 1}: {round(x, 2)} {round(y, 2)} {material} {class_fire}")
+        print()
+
+        print(f"Injured: {len(self.blue_obj)}")
+        print()
+
+        for idx, cloud in enumerate(self.blue_obj):
+            x, y = np.mean(cloud, axis=0)
+
+            idd, dis = self.find_closest([x, y], self.fires)
+            print(f"Injured {idx + 1}: {round(x, 2)} {round(y, 2)} {idd + 1}")
 
     def mask_overlay(self, frame):
         mask = np.zeros(frame.shape[:2], dtype="uint8")
@@ -53,33 +81,41 @@ class FireSearch:
 
         return mask
 
-    def find_closest(self, point):
+    def blue_overlay(self, frame):
+        mask = cv2.inRange(frame, self.blue_lower, self.blue_upper)
+
+        mask = cv2.erode(mask, None, iterations=2)
+        mask = cv2.dilate(mask, None, iterations=2)
+
+        return mask
+
+    def find_closest(self, point, tuple_obj):
         distances = []
-        for fire in self.fires:
+        for fire in tuple_obj:
             distances.append((fire[0][0] - point[0]) ** 2 + (fire[0][1] - point[1]) ** 2)
         
         min_dist = min(distances)
         return distances.index(min_dist), min_dist
 
-    def insert_fire(self, point):
-        if len(self.fires) == 0:
-            self.fires.append([point])
+    def insert_fire(self, point, idx):
+        obj = (self.fires if idx == 0 else self.blue_obj)
+        
+        if len(obj) == 0:
+            obj.append([point])
             return
 
-        idx, distance = self.find_closest(point)
+        idx, distance = self.find_closest(point, obj)
         if distance <= self.fire_radius:
-            self.fires[idx].append(point)
+            obj[idx].append(point)
             return
-        self.fires.append([point])
+        obj.append([point])
 
     def publish_markers(self):
         result = []
         iddd = 0
         for fs in self.fires:
             m = np.mean(fs, axis=0)
-            # result.append(transform_marker(marker, frame_to="aruco_map"))
-            # cx_map, cy_map, cz_map, _ = transform_xyz_yaw(
-            # marker.cx_cam, marker.cy_cam, marker.cz_cam, 0, "main_camera_optical", frame_to, listener)
+
             marker = Marker()
             marker.header.frame_id = "aruco_map"
             marker.header.stamp = rospy.Time.now()
@@ -109,72 +145,144 @@ class FireSearch:
         self.fires_pub.publish(MarkerArray(markers=result))
         return None
 
-    def on_frame(self, frame, mask_floor):
-        hsv = cv2.cvtColor(
-                frame, 
-                cv2.COLOR_BGR2HSV)
+    def publish_markers_blue(self):
+        result = []
+        iddd = 0
+        for fs in self.blue_obj:
+            m = np.mean(fs, axis=0)
 
-        mask = self.mask_overlay(hsv)
+            marker = Marker()
+            marker.header.frame_id = "aruco_map"
+            marker.header.stamp = rospy.Time.now()
+            marker.ns = "color_markers"
+            marker.id = iddd
+            marker.type =  Marker.CUBE
+            marker.action = Marker.ADD
+            marker.pose.position.x = m[0]
+            marker.pose.position.y = m[1]
+            marker.pose.position.z = 0
+            marker.pose.orientation.x = 0.0
+            marker.pose.orientation.y = 0.0
+            marker.pose.orientation.z = 0.0
+            marker.pose.orientation.w = 1.0
+            marker.scale.x = 0.2
+            marker.scale.y = 0.2
+            marker.scale.z = 0.1
+
+            marker.color.a = 0.8
+
+            marker.color.r = 0
+            marker.color.g = 0.1
+            marker.color.b = 1
+
+            result.append(marker)
+            iddd += 1
+        self.blue_pub.publish(MarkerArray(markers=result))
+        return None
+
+    def distance(self, a, b):
+        return (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2
+
+    def on_frame(self, frame, mask_floor, hsv: Optional[np.ndarray] = None):
+        if hsv is None:
+            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+
+        debug = frame.copy()
+        mask_overlay = self.mask_overlay(hsv)
+
+        mask_blue = self.blue_overlay(hsv)
         
-        mask = cv2.bitwise_and(mask, mask_floor)
-
-        contours = cv2.findContours(mask, 
+        contours_floor = cv2.findContours(mask_floor, 
                 cv2.RETR_EXTERNAL, 
                 cv2.CHAIN_APPROX_SIMPLE)[-2]
 
-        frame_vol = np.prod(frame.shape[0:2])
+        cnt_floor = sorted(contours_floor , key=cv2.contourArea)[-1]
 
-        assert frame_vol != 0
-        contours = list(filter(
-                lambda c: (cv2.contourArea(c) / frame_vol) >= self.fire_fraction, 
-                contours))
+        mannualy_contour = []
 
-        if len(contours) > 0:
+        convex_floor = cv2.convexHull(cnt_floor, returnPoints=False)
+        defects = cv2.convexityDefects(cnt_floor, convex_floor)
+
+        if defects is not None:
+            for i in range(defects.shape[0]):
+                s,e,f,d = defects[i,0]
+                start = tuple(cnt_floor[s][0])
+                end = tuple(cnt_floor[e][0])
+                far = tuple(cnt_floor[f][0])
+
+                dst = self.distance(start, end)
+
+                mannualy_contour.append(start)
+                if dst >= 40:
+                    mannualy_contour.append(far)
+                mannualy_contour.append(end)
+
+        mannualy_contour = np.array(mannualy_contour).reshape((-1,1,2)).astype(np.int32)
+        cv2.drawContours(debug, [mannualy_contour], 0, (0,255,0), 3)
+
+        mask_floor = np.zeros(mask_floor.shape, dtype="uint8")
+        mask_floor = cv2.fillPoly(mask_floor, pts = [mannualy_contour], color=(255,255,255))
+
+        mask = cv2.bitwise_and(mask_overlay, mask_overlay, mask=mask_floor)
+        mask_blue = cv2.bitwise_and(mask_blue, mask_blue, mask=mask_floor)
+
+        masks = [mask, mask_blue]
+
+        for idx, m in enumerate(masks):
+            contours = cv2.findContours(m, 
+                    cv2.RETR_EXTERNAL, 
+                    cv2.CHAIN_APPROX_SIMPLE)[-2]
+
+            frame_vol = np.prod(frame.shape[0:2])
+
+            assert frame_vol != 0
+            contours = list(filter(
+                    lambda c: (cv2.contourArea(c) / frame_vol) >= self.fire_fraction and (cv2.contourArea(c) / frame_vol) < 0.2, 
+                    contours))
+
             pnt_img = []
             for cnt in contours:
-                _, _, w, h = cv2.boundingRect(cnt)
-                ratio = w / h
-                
-                if abs(1.0 - ratio) >= 0.4:
-                    continue
-                
                 M = cv2.moments(cnt)
 
+                if M["m00"] == 0:
+                    continue
+
                 pnt_img.append(
-                    [int(M["m10"] / M["m00"]),
-                    int(M["m01"] / M["m00"])])
-                #self.insert_fire(pnt_img[-1])
-                #cv2.circle(frame, pnt_img[-1], 6, (255, 0, 0), 2)
+                        [int(M["m10"] / (M["m00"])),
+                        int(M["m01"] / (M["m00"]))])
 
-            pnt_img = np.array(pnt_img).astype(np.float64)
-            pnt_img_undist = cv2.undistortPoints(pnt_img.reshape(-1, 1, 2), self.cm, self.dc, None, None).reshape(-1, 2).T
-            ray_v = np.ones((3, pnt_img_undist.shape[1]))
-            ray_v[:2, :] = pnt_img_undist
-            ray_v /= np.linalg.norm(ray_v, axis=0)
+                cv2.circle(debug, tuple(pnt_img[-1]), 6, (255, 0, 0), 2)
 
-            print(ray_v.shape)
-            if self.tf_buffer is not None:
-                try:
-                    transform = self.tf_buffer.lookup_transform("aruco_map", "main_camera_optical", rospy.Time())
-                except tf2_ros.LookupException:
-                    print("tf2_ros.LookupException")
-                    return None
-                # R_wb = np.array(quaternion_matrix([transform.transform.rotation.w, transform.transform.rotation.x, transform.transform.rotation.y, transform.transform.rotation.z]))[:3, :3]
-                t_wb = np.array([transform.transform.translation.x, transform.transform.translation.y, transform.transform.translation.z])
-                # ray_v = np.array(
-                #     [[0, 0, -1]]
-                # ).T
-                # print(R_wb)
-                ray_v = np.array([unpack_vec(tf2_geometry_msgs.do_transform_vector3(Vector3Stamped(vector=Vector3(v[0], v[1], v[2])), transform)) for v in ray_v.T])
-                ray_o = t_wb
+                color = ((0,255,0) if idx == 0 else (0, 0, 255))
+                cv2.drawContours(debug, [cnt], 0, color, 3) 
 
-                pnts = [intersect_ray_plane(v, ray_o) for v in ray_v]
-                pnts = [p for p in pnts if p is not None]
-                print(pnts)
-                for p in pnts:
-                    self.insert_fire(p[:2])
+            if len(pnt_img) > 0:
+#                """
+                pnt_img = np.array(pnt_img).astype(np.float64)
+                pnt_img_undist = cv2.undistortPoints(pnt_img.reshape(-1, 1, 2), self.cm, self.dc, None, None).reshape(-1, 2).T
+                ray_v = np.ones((3, pnt_img_undist.shape[1]))
+                ray_v[:2, :] = pnt_img_undist
+                ray_v /= np.linalg.norm(ray_v, axis=0)
+
+                if self.tf_buffer is not None:
+                    try:
+                        transform = self.tf_buffer.lookup_transform("aruco_map", "main_camera_optical", rospy.Time())
+                    except tf2_ros.ConnectivityException:
+                        print("LookupException")
+                        return None
+                    except tf2_ros.LookupException:
+                        print("LookupException")
+                        return None
+
+                    t_wb = np.array([transform.transform.translation.x, transform.transform.translation.y, transform.transform.translation.z])
+
+                    ray_v = np.array([unpack_vec(tf2_geometry_msgs.do_transform_vector3(Vector3Stamped(vector=Vector3(v[0], v[1], v[2])), transform)) for v in ray_v.T])
+                    ray_o = t_wb
+
+                    pnts = [intersect_ray_plane(v, ray_o) for v in ray_v]
+                    [self.insert_fire(p[:2], idx) for p in pnts if p is not None]
+#        """
         self.publish_markers()
-        # cv2.imshow('frame', frame)
-        # cv2.imshow('mask_floor', mask_floor)
-        # cv2.imshow('mask', mask)
-        # cv2.waitKey(10)
+        self.publish_markers_blue()
+        self.debug_pub.publish(self.cv_bridge.cv2_to_imgmsg(debug, "bgr8"))
+        self.mask_overlay_pub.publish(self.cv_bridge.cv2_to_imgmsg(mask_floor, "mono8"))

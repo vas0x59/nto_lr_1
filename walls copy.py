@@ -70,11 +70,10 @@ class WallDetector:
         self.map_a = np.zeros((map_a_wh[1], map_a_wh[0]), dtype=np.uint8)
         self.pls = Pls(dict(), [])
         self.wall_alg_params = Params(
-            ldf=rect_overlap_metric, 
-            assign_to_prev_th=1.5,
-            dbscan_eps=0.6,
-            connect_dist_th=0.3,
-            dbscan_min_samples=1
+            ldf=simple_distance, 
+            assign_to_prev_th=3,
+            dbscan_eps=1,
+            connect_dist_th=0.3
         )
 
     def map_xy2ij(self, xy):
@@ -95,14 +94,35 @@ class WallDetector:
 
 
     def on_pnts(self, pnts: List[np.ndarray]):
+        debug_map = np.zeros((*self.map_a.shape, 3), dtype="uint8")
+
         xy = np.array(pnts)[:, :2]
         # print("xy:", xy)
         ijs = np.round((xy.reshape(-1, 2)[:, :2] - self.map_origin) / self.resolution).astype(np.int)[:, ::-1]
         ijs = ijs[(ijs[:, 0]>=0) & (ijs[:, 1]>=0)& (ijs[:, 1] < self.map_a.shape[1])& (ijs[:, 0] < self.map_a.shape[0])]
         # print("ijs:", ijs)
-        self.map_a[ijs[:, 0], ijs[:, 1]] = np.clip(self.map_a[ijs[:, 0], ijs[:, 1]] + 10, 0, 244)
+        local_map = np.zeros(self.map_a.shape, dtype=np.uint8)
+        
+        
+        local_map[ijs[:, 0], ijs[:, 1]] = 255
+        linesP = cv2.HoughLinesP(local_map, 1, np.pi / 180, 25, None, 10, 50)
+        debug_map[:, :, 0] = local_map.copy()
+        if linesP is not None:
+            hls = [LineSP.from_2pnt(*[self.map_ij2xy([l[0][1], l[0][0]]), self.map_ij2xy([l[0][3], l[0][2]])]) for l in linesP]
+            hls = [hl for hl in hls if abs(np.dot(hl.v, np.array([1, 0]))/np.dot(hl.v, hl.v)) < 0.1 or abs(np.dot(hl.v, np.array([0,1]))/np.dot(hl.v, hl.v)) < 0.1]
+            # print("hls", hls)
+            self.pls = proc_new(hls, self.pls, self.wall_alg_params)
+            # print("pls", self.pls.pls)
+            for i in range(0, len(hls)): 
+                l = hls[i]
+                # cv2.line(debug_map, tuple(self.map_xy2ij(l.p0).astype(np.int)[::-1]), tuple(self.map_xy2ij(l.p1).astype(np.int)[::-1]), (20,150,20), 2, cv2.LINE_AA)
+        # for p in pnts:
+        #     ij = self.map_xy2ij(p[:2])
+        #     if ij is None:
+        #         continue
+        #     self.map_a[ij[0], ij[1]] = np.clip(self.map_a[ij[0], ij[1]] + 15, 0, 255)
             # self.map_a[ij[0], ij[1]] = 255
-
+        self.map_img_pub.publish(self.cv_bridge.cv2_to_imgmsg(np.flip(debug_map, 0), "bgr8")) # mono
 
     def proc_map(self):
         debug_map = np.zeros((*self.map_a.shape, 3), dtype="uint8")
@@ -114,7 +134,7 @@ class WallDetector:
         #     cv2.imshow("dilate_map_a", dilate)
 
         ## hough
-        linesP = cv2.HoughLinesP(255*(self.map_a > 100).astype("uint8"), 1, np.pi / 200, 15, None, 10//3, 50//3)
+        # linesP = cv2.HoughLinesP(255*(self.map_a > 100).astype("uint8"), 1, np.pi / 180, 25, None, 10, 50)
         
         # if lines is not None:
         #     for i in range(0, len(lines)):
@@ -128,38 +148,36 @@ class WallDetector:
         #         pt2 = (int(x0 - 1000*(-b)), int(y0 - 1000*(a)))
         #         cv2.line(debug_map, pt1, pt2, (0,255,0), 3, cv2.LINE_AA)
         ress = []
-        if linesP is not None:
-            hls = [LineSP.from_2pnt(*[self.map_ij2xy([l[0][1], l[0][0]]), self.map_ij2xy([l[0][3], l[0][2]])]) for l in linesP]
-            hls = [hl for hl in hls if abs(np.dot(hl.v, np.array([1, 0]))/np.dot(hl.v, hl.v)) < 0.1 or abs(np.dot(hl.v, np.array([0,1]))/np.dot(hl.v, hl.v)) < 0.1]
-            hls = [hl for hl in hls if hl.len() > 0.4]
-            # print("hls", len(hls))
-            self.pls.pls = create_new_pls_dbscan(hls, self.wall_alg_params)
-            # self.pls = proc_new(hls, self.pls, self.wall_alg_params)
-            # print("pls", len(self.pls.pls))
-            for i in range(0, len(hls)): 
-                l = hls[i]
-                cv2.line(debug_map, tuple(self.map_xy2ij(l.p0).astype(np.int)[::-1]), tuple(self.map_xy2ij(l.p1).astype(np.int)[::-1]), (20,150,20), 2, cv2.LINE_AA)
-                marker = Marker()
-                marker.header.frame_id = "aruco_map"
-                marker.header.stamp = rospy.Time.now()
-                marker.ns = "color_markers"
-                marker.id = i
-                marker.type =  Marker.LINE_LIST
-                marker.action = Marker.ADD
-                marker.points = [Point(i[0], i[1], 0) for i in [l.p0, l.p1]]
-                marker.color.a = 0.5
-                marker.pose.position.x = 0
-                marker.pose.position.y = 0
-                marker.pose.position.z = 0
-                marker.pose.orientation.x = 0.0
-                marker.pose.orientation.y = 0.0
-                marker.pose.orientation.z = 0.0
-                marker.pose.orientation.w = 1.0
-                marker.color.r = 1
-                marker.color.g = 0
-                marker.color.b = 1
-                marker.scale.x = 0.01
-                ress.append(marker)
+        if True:
+            # hls = [LineSP.from_2pnt(*[self.map_ij2xy([l[0][1], l[0][0]]), self.map_ij2xy([l[0][3], l[0][2]])]) for l in linesP]
+            # hls = [hl for hl in hls if abs(np.dot(hl.v, np.array([1, 0]))/np.dot(hl.v, hl.v)) < 0.1 or abs(np.dot(hl.v, np.array([0,1]))/np.dot(hl.v, hl.v)) < 0.1]
+            # # print("hls", hls)
+            # self.pls = proc_new(hls, Pls(dict(), []), self.wall_alg_params)
+            # # print("pls", self.pls.pls)
+            # for i in range(0, len(hls)): 
+            #     l = hls[i]
+            #     cv2.line(debug_map, tuple(self.map_xy2ij(l.p0).astype(np.int)[::-1]), tuple(self.map_xy2ij(l.p1).astype(np.int)[::-1]), (20,150,20), 2, cv2.LINE_AA)
+            #     marker = Marker()
+            #     marker.header.frame_id = "aruco_map"
+            #     marker.header.stamp = rospy.Time.now()
+            #     marker.ns = "color_markers"
+            #     marker.id = i
+            #     marker.type =  Marker.LINE_LIST
+            #     marker.action = Marker.ADD
+            #     marker.points = [Point(i[0], i[1], 0) for i in xys]
+            #     marker.color.a = 0.5
+            #     marker.pose.position.x = 0
+            #     marker.pose.position.y = 0
+            #     marker.pose.position.z = 0
+            #     marker.pose.orientation.x = 0.0
+            #     marker.pose.orientation.y = 0.0
+            #     marker.pose.orientation.z = 0.0
+            #     marker.pose.orientation.w = 1.0
+            #     marker.color.r = 1
+            #     marker.color.g = 0
+            #     marker.color.b = 1
+            #     marker.scale.x = 0.01
+            #     ress.append(marker)
 
             for i in range(0, len(self.pls.pls)):
                 marker = Marker()
@@ -186,16 +204,10 @@ class WallDetector:
 
         self.markers_arr_pub.publish(MarkerArray(markers=ress))
     
-        debug_map[:, :, 0] = self.map_a.copy()
+        # debug_map[:, :, 0] = self.map_a.copy()
         # self.map_a = dilate
-        self.map_img_pub.publish(self.cv_bridge.cv2_to_imgmsg(np.flip(debug_map, 0), "bgr8")) # mono
+        # self.map_img_pub.publish(self.cv_bridge.cv2_to_imgmsg(np.flip(debug_map, 0), "bgr8")) # mono
         return None
-
-    def report(self):
-        # for l in self.pls.pls:
-        # print(self.pls.pls)
-        s = list(sorted(self.pls.pls, key=lambda l: l.p_tau(0.5)[0]))
-        print("\n".join(map(lambda x: f"Wall {x[0]}: {x[1].len()}", enumerate(s, 1))))
 
 
     def on_frame(self, img: np.ndarray, mask_floor: np.ndarray, hsv: Optional[np.ndarray] = None) -> None:
@@ -219,10 +231,10 @@ class WallDetector:
         canny = cv2.Canny(mask,100,200)      
 
         canny_masked = cv2.bitwise_and(canny, canny, mask=self.legs_mask)
-        # canny_masked = cv2.bitwise_and(canny_masked, canny_masked, mask=cv2.bitwise_not(mask_floor_0))
+        canny_masked = cv2.bitwise_and(canny_masked, canny_masked, mask=cv2.bitwise_not(mask_floor_0))
         
         points = np.array(np.where(canny_masked))[::-1, :].astype(np.float64).T
-        # print("mask: ", 1000*(time.time() - t1)); t1= time.time()
+        print("mask: ", 1000*(time.time() - t1)); t1= time.time()
         for i in points:
             cv2.circle(debug,(int(i[0]),int(i[1])), 1, (0,0,255), -1)
         # undistort points
@@ -233,8 +245,8 @@ class WallDetector:
             # ray_v = np.linalg.pinv(self.cm) @ ray_v
             ray_v /= np.linalg.norm(ray_v, axis=0)
 
-            # print(ray_v.shape)
-            # print("undistortPoints: ", 1000*(time.time() - t1)); t1= time.time()
+            print(ray_v.shape)
+            print("undistortPoints: ", 1000*(time.time() - t1)); t1= time.time()
         
             # if self.tf_buffer is not None:
                 # print()
@@ -260,12 +272,15 @@ class WallDetector:
             pnts = [intersect_ray_plane(v, ray_o) for v in ray_v]
             pnts = [p for p in pnts if p is not None]
             # print(pnts)
-            # print("transform: ", 1000*(time.time() - t1)); t1= time.time()
+            print("transform: ", 1000*(time.time() - t1)); t1= time.time()
             self.on_pnts(pnts)
-            # print("on_pnts: ", 1000*(time.time() - t1)); t1= time.time()
+            print("on_pnts: ", 1000*(time.time() - t1)); t1= time.time()
             self.point_cloud_pub.publish(PointCloud(header=Header(frame_id="aruco_map", stamp=rospy.Time.now()), points=[Point32(p[0], p[1], p[2]) for p in pnts]))
         
-        # print("proc_map: ", 1000*(time.time() - t1)); t1= time.time()
+        self.proc_map()
+
+        print("proc_map: ", 1000*(time.time() - t1)); t1= time.time()
+        
         self.debug_img_pub.publish(self.cv_bridge.cv2_to_imgmsg(debug, "bgr8"))
         if self.debug:
             cv2.imshow("debug", debug)
