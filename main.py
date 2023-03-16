@@ -20,8 +20,9 @@ import numpy as np
 import threading
 
 class NodeHandler:
+    # Пороговые значения для пола
     floor_thr = [
-                np.array([0, 0, 0]),
+        np.array([0, 0, 0]),
         np.array([180, 255, 120])
     ]
 
@@ -35,6 +36,7 @@ class NodeHandler:
         self.fires = fire.FireSearch()
         
         if video_file is not None:
+            # Для тестирования кода (с использованием видео)
             self.cap = cv2.VideoCapture(video_file)
             if not self.cap:
                 raise Exception(f"Couldn`t open video file {video_file}")
@@ -45,7 +47,8 @@ class NodeHandler:
             rospy.Timer(rospy.Duration(1/30), self.video_callback)
         else:
             self.cm, self.dc = camera_cfg_cvt(
-                    rospy.wait_for_message("/main_camera/camera_info", CameraInfo))
+            rospy.wait_for_message("/main_camera/camera_info", CameraInfo))
+
         self.wd = walls.WallDetector(cm=self.cm, dc=self.dc, tf_buffer=self.tfBuffer, tf_listener=self.listener, cv_bridge=self.bridge)
         self.fires = fire.FireSearch(cm=self.cm, dc=self.dc, tf_buffer=self.tfBuffer, cv_bridge=self.bridge)
         if video_file is None:
@@ -55,6 +58,7 @@ class NodeHandler:
         self.stop = False
         self.th.start()
     
+    # Метод, обновляющий карту каждую 1 секунду
     def thr_target(self):
         while True:
             if self.stop:
@@ -68,10 +72,11 @@ class NodeHandler:
     def disable(self):
         self.is_start = False
         
+    # Метод, создающий маску для полаы
     def floor_mask(self, hsv):
         hsv = cv2.blur(hsv, (10, 10))
         mask = cv2.inRange(hsv, self.floor_thr[0], self.floor_thr[1])
-        #mask = cv2.bitwise_not(mask)
+
         mask = cv2.erode(mask, None, iterations=2)
         mask = cv2.dilate(mask, None, iterations=2)
         
@@ -89,6 +94,7 @@ class NodeHandler:
         
         return mask
 
+    # Метод, реализующий публикацию видеопотока (используется для тестирование кода)
     def video_callback(self, event):
         ret, frame = self.cap.read()
 
@@ -97,6 +103,7 @@ class NodeHandler:
 
         self.callback(self.bridge.cv2_to_imgmsg(frame, "bgr8"))
 
+    # Callback-метод топика с изображением
     def callback(self, msg):
         try:
             image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
@@ -109,18 +116,12 @@ class NodeHandler:
 
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         
+        # Создаем маску для пола площадки
         floor_mask = self.floor_mask(hsv)
         self.floor_mask_pub.publish(self.bridge.cv2_to_imgmsg(floor_mask, "mono8"))
 
+        # Обрабатываем новый кадр из топика
         self.wd.on_frame(img=image, mask_floor=floor_mask, hsv=hsv)
-
-        #fire_border = 20
-        #h, w, _ = image.shape
-
-        #x1, y1, x2, y2 = fire_border - 1, fire_border - 1, w - fire_border + 1, h - fire_border + 1
-        #self.fires.on_frame(image[y1:y2, x1:x2], 
-        #        mask_floor=floor_mask[y1:y2, x1:x2], 
-        #        hsv=hsv[y1:y2, x1:x2])
         self.fires.on_frame(image, mask_floor=floor_mask, hsv=hsv)
 
 get_telemetry = rospy.ServiceProxy('get_telemetry', srv.GetTelemetry)
@@ -155,6 +156,8 @@ def main():
         if not FLY_BY_SQUARE:
             clover_path = [0, 2, 0, 3, 1, 3.5, 1.5, 3, 2, 4, 4, 4, 4, 0.9, 4, 2.5, 6.5, 2.5, 6.7, 0.5, 6.5, 3.5, 4.5, 3, 4.5, 4, 2, 4, 1.5, 3, 0, 3, 0, 2]
             
+
+        # Пролетаем по координатам
   
         navigate_wait(z=FLIGHT_HEIGHT, speed = 0.6, frame_id='body', auto_arm=True)
         rospy.sleep(2)
@@ -166,18 +169,20 @@ def main():
 
         for i in range(0, len(clover_path), 2):
             if i == 4:
+                # При подлете к рабочей зоне, включаем распознавание пожаров, стен и пострадавших
                 handler.enable()
 
             navigate_wait(x=clover_path[i], y=clover_path[i+1], z=FLIGHT_HEIGHT, speed=0.3, frame_id="aruco_map")
             print("go to next point...")
 
-
+        # Выключаем распознавание
         handler.disable()
 
         navigate_wait(x=land_position[0], y=land_position[1], z=FLIGHT_HEIGHT, speed=0.3, frame_id="aruco_map")
         rospy.sleep(3)
         land()
 
+        # Отчет
         handler.fires.report()
         handler.wd.report()
 

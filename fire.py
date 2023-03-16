@@ -12,6 +12,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 import requests
 
 class FireSearch:
+    # Пороговые значения HSV для определения пожаров и пострадавших соответственно
     lower_thr = (
         (0, 30, 80),
         (170, 30, 80)
@@ -27,27 +28,38 @@ class FireSearch:
         125, 255, 255
     )
 
+    # Параметры определения пожаров
     fire_fraction = 0.0035
     fire_radius = 1
 
     def __init__(self, cm: Optional[np.ndarray] = None, dc: Optional[np.ndarray] = None, tf_buffer = None, cv_bridge = None):
+        # Параметры камеры для функции undistort
         self.cm = cm
         self.dc = dc
+
+        # TF буффер и cv_bridge для сообщений типа Image
         self.tf_buffer = tf_buffer
         self.cv_bridge = cv_bridge
-        self.fires_pub = rospy.Publisher("/a/fires_viz", MarkerArray)
-        self.blue_pub = rospy.Publisher("/a/blue_viz", MarkerArray)
+
+        # Массив для хранения координат найденных пожаров и пострадавших
         self.fires = []
         self.blue_obj = []
+        
+
+        # Топики для rviz и отладки программы
         self.debug_pub = rospy.Publisher("/a/fires_debug", Image)
         self.mask_overlay_pub = rospy.Publisher("/a/fires_mask_overlay_pub", Image)
+        self.fires_pub = rospy.Publisher("/a/fires_viz", MarkerArray)
+        self.blue_pub = rospy.Publisher("/a/blue_viz", MarkerArray)
 
+    # Метод определяющий материал пожара по координатам 
     def get_material(self, position):
         payload = {'x': position[0], 'y': position[1]}
         material = requests.get('http://65.108.222.51/check_material', params=payload).text
 
         return material
 
+    # Метод, формирующий отчет о найденных объектах
     def report(self):
         print(f"Fires: {len(self.fires)}")
         print()
@@ -70,6 +82,7 @@ class FireSearch:
             idd, dis = self.find_closest([x, y], self.fires)
             print(f"Injured {idx + 1}: {round(x, 2)} {round(y, 2)} {idd + 1}")
 
+    # Метод создает маску по заданным пороговым значениям (для определения пожаров)
     def mask_overlay(self, frame):
         mask = np.zeros(frame.shape[:2], dtype="uint8")
 
@@ -81,6 +94,7 @@ class FireSearch:
 
         return mask
 
+    # Метод создает маску по заданным пороговым значениям (для определения пострадавших)
     def blue_overlay(self, frame):
         mask = cv2.inRange(frame, self.blue_lower, self.blue_upper)
 
@@ -89,6 +103,7 @@ class FireSearch:
 
         return mask
 
+    # 
     def find_closest(self, point, tuple_obj):
         distances = []
         for fire in tuple_obj:
@@ -110,10 +125,12 @@ class FireSearch:
             return
         obj.append([point])
 
+    # Метод, публикующий маркеры пожаров в rviz
     def publish_markers(self):
         result = []
         iddd = 0
         for fs in self.fires:
+            # На основе множества распознаваний одного пострадавшего формируем усредненные координаты
             m = np.mean(fs, axis=0)
 
             marker = Marker()
@@ -123,6 +140,8 @@ class FireSearch:
             marker.id = iddd
             marker.type =  Marker.CUBE
             marker.action = Marker.ADD
+
+            # Позиция и ориентация
             marker.pose.position.x = m[0]
             marker.pose.position.y = m[1]
             marker.pose.position.z = 0
@@ -130,10 +149,13 @@ class FireSearch:
             marker.pose.orientation.y = 0.0
             marker.pose.orientation.z = 0.0
             marker.pose.orientation.w = 1.0
+            
+            # Масштаб
             marker.scale.x = 0.2
             marker.scale.y = 0.2
             marker.scale.z = 0.1
 
+            # Цвет
             marker.color.a = 0.8
 
             marker.color.r = 1
@@ -142,13 +164,17 @@ class FireSearch:
 
             result.append(marker)
             iddd += 1
+
+        # Публикуем маркеры
         self.fires_pub.publish(MarkerArray(markers=result))
         return None
 
+    # Метод, публикующий маркеры пострадавших в rviz
     def publish_markers_blue(self):
         result = []
         iddd = 0
         for fs in self.blue_obj:
+            # На основе множества распознаваний одного пострадавшего формируем усредненные координаты
             m = np.mean(fs, axis=0)
 
             marker = Marker()
@@ -158,6 +184,8 @@ class FireSearch:
             marker.id = iddd
             marker.type =  Marker.CUBE
             marker.action = Marker.ADD
+
+            # Позиция и ориентация
             marker.pose.position.x = m[0]
             marker.pose.position.y = m[1]
             marker.pose.position.z = 0
@@ -165,10 +193,13 @@ class FireSearch:
             marker.pose.orientation.y = 0.0
             marker.pose.orientation.z = 0.0
             marker.pose.orientation.w = 1.0
+
+            # Масштаб
             marker.scale.x = 0.2
             marker.scale.y = 0.2
             marker.scale.z = 0.1
 
+            # Цвет
             marker.color.a = 0.8
 
             marker.color.r = 0
@@ -177,9 +208,12 @@ class FireSearch:
 
             result.append(marker)
             iddd += 1
+
+        # Публикуем маркеры
         self.blue_pub.publish(MarkerArray(markers=result))
         return None
 
+    # Вспомогательный метод для определения расстояния между 2 точками
     def distance(self, a, b):
         return (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2
 
@@ -187,11 +221,13 @@ class FireSearch:
         if hsv is None:
             hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
+        # Создаем маски для нахождения пожаров и пострадавших
         debug = frame.copy()
         mask_overlay = self.mask_overlay(hsv)
 
         mask_blue = self.blue_overlay(hsv)
         
+        # Создаем маску для пола площадки
         contours_floor = cv2.findContours(mask_floor, 
                 cv2.RETR_EXTERNAL, 
                 cv2.CHAIN_APPROX_SIMPLE)[-2]
@@ -228,6 +264,7 @@ class FireSearch:
 
         masks = [mask, mask_blue]
 
+        # Проходимся по маскам для нахождения пожаров и пострадавших
         for idx, m in enumerate(masks):
             contours = cv2.findContours(m, 
                     cv2.RETR_EXTERNAL, 
@@ -235,11 +272,13 @@ class FireSearch:
 
             frame_vol = np.prod(frame.shape[0:2])
 
+            # Фильтруем объекты по площади
             assert frame_vol != 0
             contours = list(filter(
                     lambda c: (cv2.contourArea(c) / frame_vol) >= self.fire_fraction and (cv2.contourArea(c) / frame_vol) < 0.2, 
                     contours))
 
+            # Находим центры объектов в кадре
             pnt_img = []
             for cnt in contours:
                 M = cv2.moments(cnt)
@@ -256,8 +295,8 @@ class FireSearch:
                 color = ((0,255,0) if idx == 0 else (0, 0, 255))
                 cv2.drawContours(debug, [cnt], 0, color, 3) 
 
+            # Находим координаты объекта, относительно aruco_map
             if len(pnt_img) > 0:
-#                """
                 pnt_img = np.array(pnt_img).astype(np.float64)
                 pnt_img_undist = cv2.undistortPoints(pnt_img.reshape(-1, 1, 2), self.cm, self.dc, None, None).reshape(-1, 2).T
                 ray_v = np.ones((3, pnt_img_undist.shape[1]))
@@ -281,7 +320,8 @@ class FireSearch:
 
                     pnts = [intersect_ray_plane(v, ray_o) for v in ray_v]
                     [self.insert_fire(p[:2], idx) for p in pnts if p is not None]
-#        """
+
+        # Публикуем маркеры rviz и изображения дл отладки
         self.publish_markers()
         self.publish_markers_blue()
         self.debug_pub.publish(self.cv_bridge.cv2_to_imgmsg(debug, "bgr8"))
