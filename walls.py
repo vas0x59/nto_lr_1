@@ -38,16 +38,28 @@ def contours_edges(mask, cnt_area_min, cnt_area_max):
 
 
 class WallDetector:
+    """
+    Детектор стен
+
+    топики
+    /a/point_cloud - облако точек с текущего кадра
+    /a/debug_img   - отладочное изображение детектора границы стен
+    /a/map         - карта стен
+    /a/walls_viz   - топик визуализации в Rviz
+    """
+    # Параметры детектора стен 
+
+    # Границы цвета стенок в пространстве hsv
     mask = [
         np.array([0, 0, 124]),
         np.array([103, 78, 255])
     ]
-    opening_kernel_size = 6
+    opening_kernel_size = 6 
     erode_kernel_size = 6
     opening_iterations = 1
     debug = False
-    resolution = 0.03
-    map_wh = (7, 4)
+    resolution = 0.03 # Размер ячейки карты 
+    map_wh = (7, 4) # Размеры поля
     map_origin = np.array([0, 0])
     
     def __init__(self, cm: Optional[np.ndarray] = None, dc: Optional[np.ndarray] = None, tf_buffer = None, tf_listener = None, cv_bridge = None  ) -> None:
@@ -69,6 +81,8 @@ class WallDetector:
         map_a_wh = (int(self.map_wh[0]/self.resolution), int(self.map_wh[1]/self.resolution))
         self.map_a = np.zeros((map_a_wh[1], map_a_wh[0]), dtype=np.uint8)
         self.pls = Pls(dict(), [])
+
+        # Параметры алгоритма обработки линий
         self.wall_alg_params = Params(
             ldf=rect_overlap_metric, 
             assign_to_prev_th=1.5,
@@ -78,23 +92,37 @@ class WallDetector:
         )
 
     def map_xy2ij(self, xy):
+        """
+        Перевод координат из aruco_map в индексы массива карты 
+        """
+        
         ij = np.round((xy.reshape(-1)[:2] - self.map_origin) / self.resolution).astype(np.int)[::-1]
         if ij[0] < 0 or ij[1] < 0 or ij[0] >= self.map_a.shape[0] or ij[1] >= self.map_a.shape[1]:
             return None
         return ij
 
 
-    def map_ij2xy(self, ij):
+    def map_ij2xy(self, ij): 
+        """
+        Перевод координат из индексы массива карты в aruco_map
+        """
+        
         xy = self.resolution*np.array(ij)[::-1] + self.map_origin
         return xy
 
 
     def set_cm_dc(self, cm: np.ndarray, dc: np.ndarray):
+        """
+        Установка параметров камеры
+        """
         self.cm = cm/2; self.cm[2, 2] = 1
         self.dc = dc 
 
 
     def on_pnts(self, pnts: List[np.ndarray]):
+        """
+        Обработка новых точек (добавление в карту)
+        """
         xy = np.array(pnts)[:, :2]
         # print("xy:", xy)
         ijs = np.round((xy.reshape(-1, 2)[:, :2] - self.map_origin) / self.resolution).astype(np.int)[:, ::-1]
@@ -105,6 +133,10 @@ class WallDetector:
 
 
     def proc_map(self):
+        """
+        Обработка карты.
+        Поиск и фильтрация линий (стен).
+        """
         debug_map = np.zeros((*self.map_a.shape, 3), dtype="uint8")
 
         # eroded = cv2.erode(self.map_a, np.ones((5, 5),np.uint8), iterations=1)
@@ -113,7 +145,7 @@ class WallDetector:
         # if self.debug:
         #     cv2.imshow("dilate_map_a", dilate)
 
-        ## hough
+        # детектор линий probabilistic Hough transform algorithm
         linesP = cv2.HoughLinesP(255*(self.map_a > 100).astype("uint8"), 1, np.pi / 200, 15, None, 10//3, 50//3)
         
         # if lines is not None:
@@ -160,7 +192,6 @@ class WallDetector:
                 marker.color.b = 1
                 marker.scale.x = 0.01
                 ress.append(marker)
-
             for i in range(0, len(self.pls.pls)):
                 marker = Marker()
                 marker.header.frame_id = "aruco_map"
@@ -192,6 +223,9 @@ class WallDetector:
         return None
 
     def report(self):
+        """
+        Вывод отчета 
+        """
         # for l in self.pls.pls:
         # print(self.pls.pls)
         s = list(sorted(self.pls.pls, key=lambda l: l.p_tau(0.5)[0]))
@@ -199,6 +233,9 @@ class WallDetector:
 
 
     def on_frame(self, img: np.ndarray, mask_floor: np.ndarray, hsv: Optional[np.ndarray] = None) -> None:
+        """
+        Функция обработки нового кадра с камеры.
+        """
         img_0 = cv2.resize(img, (160, 120))
         t1 = time.time()
         if hsv is None:
@@ -208,6 +245,9 @@ class WallDetector:
         if self.cm is None:
             return None
         debug = img_0.copy()
+
+        # получение маски границ стенок
+
         mask_floor_0 = cv2.resize(mask_floor, (160, 120))
         hsv_mask = cv2.inRange(hsv_0, self.mask[0], self.mask[1])
         
@@ -221,12 +261,14 @@ class WallDetector:
         canny_masked = cv2.bitwise_and(canny, canny, mask=self.legs_mask)
         # canny_masked = cv2.bitwise_and(canny_masked, canny_masked, mask=cv2.bitwise_not(mask_floor_0))
         
+        # точки границ стенок
         points = np.array(np.where(canny_masked))[::-1, :].astype(np.float64).T
         # print("mask: ", 1000*(time.time() - t1)); t1= time.time()
         for i in points:
             cv2.circle(debug,(int(i[0]),int(i[1])), 1, (0,0,255), -1)
-        # undistort points
+
         if len(points) > 0:
+            # расчет лучей из камеры проходящих через точки на кадре
             pnt_img_undist = cv2.undistortPoints(points.reshape(-1, 1, 2), self.cm, self.dc, None, None).reshape(-1, 2).T
             ray_v = np.ones((3, pnt_img_undist.shape[1]))
             ray_v[:2, :] = pnt_img_undist
@@ -238,6 +280,8 @@ class WallDetector:
         
             # if self.tf_buffer is not None:
                 # print()
+
+            # получение преобразования координат из main_camera_optical в aruco_map
             try:
                 transform = self.tf_buffer.lookup_transform("aruco_map", "main_camera_optical", rospy.Time())
             except tf2_ros.ConnectivityException:
@@ -254,9 +298,13 @@ class WallDetector:
             # print(R_wb)
             
             # ray_v = np.array([unpack_vec(tf2_geometry_msgs.do_transform_vector3(Vector3Stamped(vector=Vector3(v[0], v[1], v[2])), transform)) for v in ray_v.T])
+            
+            
+            # применение преобразования лучам
             ray_v = np.matmul(R_wb, ray_v).T
             ray_o = t_wb
 
+            # расчет координат границ стен в плоскости пола 
             pnts = [intersect_ray_plane(v, ray_o) for v in ray_v]
             pnts = [p for p in pnts if p is not None]
             # print(pnts)

@@ -12,6 +12,10 @@ norm = np.linalg.norm
 
 @dataclass
 class LineSP: # t in [0 t_max]
+    """
+    Класс параметрического представления отрезка 
+    
+    """
     p0: np.ndarray
     v: np.ndarray
     t_max: float
@@ -30,15 +34,24 @@ class LineSP: # t in [0 t_max]
 
 
 def param_of_nearest_pnt_on_line(a: np.ndarray, l: LineSP) -> float:
+    """
+    Расчет параметра точки на линии ближайшей к данной 
+    """
     b = a - l.p0
     return np.dot(b, l.v) / np.dot(l.v, l.v)
 
 def make_dir_the_same(l_a: LineSP, l_b: LineSP) -> LineSP:
+    """
+    l_b || l_a
+    """
     if np.dot(l_a.v, l_b.v) >= np.dot(l_a.v, -l_b.v):
         return l_b
     return LineSP(l_b.p_tau(1), -l_b.v, l_b.t_max)
 
 def linesp_agg1(lines: List[LineSP]) -> LineSP:
+    """
+    Функция построения "среднего" отрезка 
+    """
     ls = [make_dir_the_same(lines[0], l) for l in lines]
     mean_v = np.mean([l.v/np.linalg.norm(l.v) for l in ls], axis=0)
     mean_v /= np.linalg.norm(mean_v)
@@ -82,11 +95,17 @@ import math
 
 
 def rotated_rect_from_line(l: LineSP, t: float) ->Tuple:
+    """
+    RotatedRect из LineSP
+    """
     return (
         tuple(l.p_tau(0.5)), (l.len(), t), (180/np.pi)*math.atan2(l.v[1], l.v[0])
     )
 
 def rect_overlap_metric(l1: LineSP, l2: LineSP, t: float = 0.3) -> float:
+    """
+    Метрика схожести линий
+    """
     a1 = l1.len()*t
     a2 = l2.len()*t
     r1 = rotated_rect_from_line(l1, t)
@@ -114,6 +133,9 @@ def assign_to_prev(hls: List[LineSP], pls: List[LineSP], params: Params) -> List
 
 
 def create_new_pls_dbscan(hls: List[LineSP], params: Params) -> List[LineSP]:
+    """
+    Кластеризация линий (DBSCAN)
+    """
     # cluster
     # linesp from cluster
     # done
