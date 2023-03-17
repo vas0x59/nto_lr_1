@@ -32,10 +32,11 @@ class FireSearch:
     fire_fraction = 0.0035
     fire_radius = 1
 
-    def __init__(self, cm: Optional[np.ndarray] = None, dc: Optional[np.ndarray] = None, tf_buffer = None, cv_bridge = None):
+    def __init__(self, cm: Optional[np.ndarray] = None, dc: Optional[np.ndarray] = None, tf_buffer = None, cv_bridge = None, on_fire=None):
         # Параметры камеры для функции undistort
         self.cm = cm
         self.dc = dc
+        self.on_fire = on_fire
 
         # TF буффер и cv_bridge для сообщений типа Image
         self.tf_buffer = tf_buffer
@@ -58,9 +59,14 @@ class FireSearch:
         material = requests.get('http://65.108.222.51/check_material', params=payload).text
 
         return material
-
+    def get_class(self, p):
+        a_classes = ['coal', 'textiles', 'plastics']
+        material = self.get_material(p)
+        class_fire = ('A' if material in a_classes else 'B')
+        return class_fire
     # Метод, формирующий отчет о найденных объектах
     def report(self):
+        
         print(f"Fires: {len(self.fires)}")
         print()
 
@@ -97,7 +103,7 @@ class FireSearch:
     # Метод создает маску по заданным пороговым значениям (для определения пострадавших)
     def blue_overlay(self, frame):
         mask = cv2.inRange(frame, self.blue_lower, self.blue_upper)
-
+        
         mask = cv2.erode(mask, None, iterations=2)
         mask = cv2.dilate(mask, None, iterations=2)
 
@@ -117,6 +123,7 @@ class FireSearch:
         
         if len(obj) == 0:
             obj.append([point])
+            self.on_fire(np.array(point), self.get_class(point))
             return
 
         idx, distance = self.find_closest(point, obj)
@@ -124,6 +131,7 @@ class FireSearch:
             obj[idx].append(point)
             return
         obj.append([point])
+        self.on_fire(np.array(point), self.get_class(point))
 
     # Метод, публикующий маркеры пожаров в rviz
     def publish_markers(self):

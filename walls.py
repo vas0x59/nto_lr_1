@@ -35,6 +35,30 @@ def contours_edges(mask, cnt_area_min, cnt_area_max):
     out[0:10, :] = 0
     # out[:, :] = 0
     
+def create_rviz_marker_from_line(line: LineSP, i: int, ns: str, r: float, g: float, b: float, w: float, a: float = 0.4) -> Marker:
+    marker = Marker()
+    marker.header.frame_id = "aruco_map"
+    marker.header.stamp = rospy.Time.now()
+    marker.ns = ns
+    marker.id = i
+    marker.type =  Marker.ARROW
+    marker.action = Marker.ADD
+    marker.points = [Point(i[0], i[1], 0) for i in [line.p0, line.p1]]
+    marker.color.a = a
+    marker.pose.position.x = 0
+    marker.pose.position.y = 0
+    marker.pose.position.z = 0
+    marker.pose.orientation.x = 0.0
+    marker.pose.orientation.y = 0.0
+    marker.pose.orientation.z = 0.0
+    marker.pose.orientation.w = 1.0
+    marker.color.r = r
+    marker.color.g = g
+    marker.color.b = b
+    marker.scale.x = w
+    marker.scale.y = w*1.5
+    return marker
+
 
 
 class WallDetector:
@@ -59,16 +83,17 @@ class WallDetector:
     opening_iterations = 1
     debug = False
     resolution = 0.03 # Размер ячейки карты 
-    map_wh = (7, 4) # Размеры поля
+    map_wh = (7.2, 4) # Размеры поля
     map_origin = np.array([0, 0])
     
-    def __init__(self, cm: Optional[np.ndarray] = None, dc: Optional[np.ndarray] = None, tf_buffer = None, tf_listener = None, cv_bridge = None  ) -> None:
+    def __init__(self, cm: Optional[np.ndarray] = None, dc: Optional[np.ndarray] = None, tf_buffer = None, tf_listener = None, cv_bridge = None, start_point = None) -> None:
         self.cm = cm/2; self.cm[2, 2] = 1
         self.dc = dc 
         self.tf_listener = tf_listener
         self.tf_buffer = tf_buffer
         self.cv_bridge = cv_bridge
-        if self.cv_bridge is None or self.tf_buffer is None:
+        self.start_point = start_point
+        if self.cv_bridge is None or self.tf_buffer is None or self.start_point is None:
             raise ValueError("self.cv_bridge is None")
         
         self.legs_mask = cv2.resize(cv2.imread("legs_mask.png", 0), (160, 120))
@@ -80,16 +105,15 @@ class WallDetector:
 
         map_a_wh = (int(self.map_wh[0]/self.resolution), int(self.map_wh[1]/self.resolution))
         self.map_a = np.zeros((map_a_wh[1], map_a_wh[0]), dtype=np.uint8)
-        self.pls = Pls(dict(), [])
 
         # Параметры алгоритма обработки линий
-        self.wall_alg_params = Params(
+        self.wp = WallsProcessor(Params(
             ldf=rect_overlap_metric, 
-            assign_to_prev_th=1.5,
-            dbscan_eps=0.6,
-            connect_dist_th=0.3,
+            assign_to_prev_th=0.7,
+            dbscan_eps=0.7,
+            connect_dist_th=0.32,
             dbscan_min_samples=1
-        )
+        ))
 
     def map_xy2ij(self, xy):
         """
@@ -138,10 +162,24 @@ class WallDetector:
         Поиск и фильтрация линий (стен).
         """
         debug_map = np.zeros((*self.map_a.shape, 3), dtype="uint8")
+        map_a_pr = self.map_a.copy()
+        # g = (map_a_pr < 50) & (map_a_pr > 5)
+        # map_a_pr[g] = np.clip(map_a_pr[g] - (50-map_a_pr[g])//20, 0, 244)
+        # map_a_pr = cv2.erode(map_a_pr, np.ones((3, 3),np.uint8), iterations=1)
+        # map_a_pr = cv2.morphologyEx(map_a_pr, cv2.MORPH_OPEN, np.ones((3, 3),np.uint8), iterations=1)
+        # map_a_pr = cv2.dilate(map_a_pr, np.ones((3, 3),np.uint8), iterations=1)
 
-        # eroded = cv2.erode(self.map_a, np.ones((5, 5),np.uint8), iterations=1)
-        # opening = cv2.morphologyEx(eroded, cv2.MORPH_OPEN, np.ones((3, 3),np.uint8), iterations=1)
-        # dilate = cv2.dilate(opening, np.ones((5, 5),np.uint8), iterations=1)
+        # sobelx64f = cv2.Sobel(map_a_pr,cv2.CV_64F,1,0,ksize=5)
+        # abs_sobel64f = np.absolute(sobelx64f)
+        # sobel_8u1 = abs_sobel64f > 160
+
+        # sobelx64f = cv2.Sobel(map_a_pr,cv2.CV_64F,0,1,ksize=5)
+        # abs_sobel64f = np.absolute(sobelx64f)
+        # sobel_8u2 = abs_sobel64f > 160
+        # sobel = np.logical_and(~np.logical_xor(sobel_8u1,  sobel_8u2),  (map_a_pr > 10)) & ( map_a_pr < 90)
+        # map_a_pr[sobel] -= 3
+
+        self.map_a = map_a_pr
         # if self.debug:
         #     cv2.imshow("dilate_map_a", dilate)
 
@@ -165,55 +203,22 @@ class WallDetector:
             hls = [hl for hl in hls if abs(np.dot(hl.v, np.array([1, 0]))/np.dot(hl.v, hl.v)) < 0.1 or abs(np.dot(hl.v, np.array([0,1]))/np.dot(hl.v, hl.v)) < 0.1]
             hls = [hl for hl in hls if hl.len() > 0.4]
             # print("hls", len(hls))
-            self.pls.pls = create_new_pls_dbscan(hls, self.wall_alg_params)
+            hls_clustered = create_new_pls_dbscan(hls, self.wp.params)
+            self.wp.proc_new(hls_clustered, self.start_point)
             # self.pls = proc_new(hls, self.pls, self.wall_alg_params)
             # print("pls", len(self.pls.pls))
             for i in range(0, len(hls)): 
                 l = hls[i]
                 cv2.line(debug_map, tuple(self.map_xy2ij(l.p0).astype(np.int)[::-1]), tuple(self.map_xy2ij(l.p1).astype(np.int)[::-1]), (20,150,20), 2, cv2.LINE_AA)
-                marker = Marker()
-                marker.header.frame_id = "aruco_map"
-                marker.header.stamp = rospy.Time.now()
-                marker.ns = "color_markers"
-                marker.id = i
-                marker.type =  Marker.LINE_LIST
-                marker.action = Marker.ADD
-                marker.points = [Point(i[0], i[1], 0) for i in [l.p0, l.p1]]
-                marker.color.a = 0.5
-                marker.pose.position.x = 0
-                marker.pose.position.y = 0
-                marker.pose.position.z = 0
-                marker.pose.orientation.x = 0.0
-                marker.pose.orientation.y = 0.0
-                marker.pose.orientation.z = 0.0
-                marker.pose.orientation.w = 1.0
-                marker.color.r = 1
-                marker.color.g = 0
-                marker.color.b = 1
-                marker.scale.x = 0.01
-                ress.append(marker)
-            for i in range(0, len(self.pls.pls)):
-                marker = Marker()
-                marker.header.frame_id = "aruco_map"
-                marker.header.stamp = rospy.Time.now()
-                marker.ns = "color_markers"
-                marker.id = i
-                marker.type =  Marker.LINE_LIST
-                marker.action = Marker.ADD
-                marker.points = [Point(i[0], i[1], 0) for i in [self.pls.pls[i].p0, self.pls.pls[i].p1]]
-                marker.color.a = 0.5
-                marker.pose.position.x = 0
-                marker.pose.position.y = 0
-                marker.pose.position.z = 0
-                marker.pose.orientation.x = 0.0
-                marker.pose.orientation.y = 0.0
-                marker.pose.orientation.z = 0.0
-                marker.pose.orientation.w = 1.0
-                marker.color.r = 0
-                marker.color.g = 1
-                marker.color.b = 0
-                marker.scale.x = 0.05
-                ress.append(marker)
+                ress.append(create_rviz_marker_from_line(l, i, "hls", 0.5, 0, 0.5, 0.01))
+            
+            for i in range(0, len(hls_clustered)):
+                ress.append(create_rviz_marker_from_line(hls_clustered[i], i, "hls_clustered", 0, 0, 1, 0.02))
+            
+            for i in range(0, len(self.wp.state_obj.walls)):
+                ress.append(create_rviz_marker_from_line(self.wp.state_obj.walls[i].line, i, "walls", *((1, 0) if self.wp.state_obj.walls[i].state == WallStates.UPDATABLE else (0, 1)), 0, 0.05))
+
+            print("self.wp.state_ob.walls", self.wp.state_obj.walls)
 
         self.markers_arr_pub.publish(MarkerArray(markers=ress))
     
@@ -228,8 +233,8 @@ class WallDetector:
         """
         # for l in self.pls.pls:
         # print(self.pls.pls)
-        s = list(sorted(self.pls.pls, key=lambda l: l.p_tau(0.5)[0]))
-        print("\n".join(map(lambda x: f"Wall {x[0]}: {x[1].len()}", enumerate(s, 1))))
+        s = list(sorted(self.wp.state_obj.walls, key=lambda l: l.line.p_tau(0.5)[0]))
+        print("\n".join(map(lambda x: f"Wall {x[0]}: {x[1].line.len()}", enumerate(s, 1))))
 
 
     def on_frame(self, img: np.ndarray, mask_floor: np.ndarray, hsv: Optional[np.ndarray] = None) -> None:

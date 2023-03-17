@@ -1,6 +1,7 @@
+from __future__ import annotations
 import numpy as np
 import cv2
-
+from dataclasses import dataclass
 
 from sensor_msgs.msg import CameraInfo, Image
 
@@ -49,6 +50,56 @@ def intersect_ray_plane(ray_v, ray_o) -> Optional[np.ndarray]:
 
 
 
+norm = np.linalg.norm
+
+@dataclass
+class LineSP: # t in [0 t_max]
+    """
+    Класс параметрического представления отрезка 
+    
+    """
+    p0: np.ndarray
+    v: np.ndarray
+    t_max: float
+    @property
+    def p1(self):
+        return self.v*self.t_max + self.p0
+    def p_t(self, t):
+        return self.v*t + self.p0
+    def p_tau(self, t):
+        return self.p_t(t*self.t_max)
+    def len(self):
+        return np.linalg.norm(self.v)*self.t_max
+    @classmethod
+    def from_2pnt(cls, a: np.ndarray, b: np.ndarray) -> LineSP:
+        return cls(a, b-a, 1)
+    def reversed(self) -> LineSP:
+        return LineSP(self.p_tau(1), -self.v.copy(), self.t_max)
+    def left_norm(self) -> np.ndarray:
+        return np.array([-self.v[1], self.v[0] ])
+    def right_norm(self) -> np.ndarray:
+        return np.array([self.v[1], -self.v[0]])
+
+def param_of_nearest_pnt_on_line(a: np.ndarray, l: LineSP) -> float:
+    """
+    Расчет параметра точки на линии ближайшей к данной 
+    """
+    b = a - l.p0
+    return np.dot(b, l.v) / np.dot(l.v, l.v)
+
+def make_dir_the_same(l_a: LineSP, l_b: LineSP) -> LineSP:
+    """
+    make l_b (l_b ^^ l_a)
+    """
+    if np.dot(l_a.v, l_b.v) >= np.dot(l_a.v, -l_b.v):
+        return l_b
+    return l_b.reversed()
 
 
+def distance_to_linesp(a: np.ndarray, l: LineSP) -> float:
+    t = np.clip(param_of_nearest_pnt_on_line(a, l), 0, l.t_max)
+    return norm(l.p_t(t) - a)
 
+def distance_to_line(a: np.ndarray, l: LineSP) -> float:
+    t = param_of_nearest_pnt_on_line(a, l)
+    return norm(l.p_t(t) - a)
