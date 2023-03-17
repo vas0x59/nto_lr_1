@@ -130,4 +130,4 @@ void loop() {
 ```
 
 # Фото команды 
-![image](https://github.com/vas0x59/nto_lr_2/blob/main/msg632116981-76186.jpg)
+![image](https://github.com/vas0x59/nto_lr_1/blob/main/msg632116981-76186.jpg)
